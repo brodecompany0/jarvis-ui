@@ -1,9 +1,15 @@
-import React, { useEffect, useState } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const URL = import.meta.env.VITE_SUPABASE_URL || "";
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+const BRIDGE_URL = "ws://127.0.0.1:3847";
 
 type AuthSession = {
   access_token: string;
@@ -63,17 +69,20 @@ async function supabaseAuth(
   email: string,
   password: string
 ): Promise<AuthSession> {
-  const r = await fetch(`${URL}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: {
-      apikey: KEY,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      email,
-      password,
-    }),
-  });
+  const r = await fetch(
+    `${URL}/auth/v1/token?grant_type=password`,
+    {
+      method: "POST",
+      headers: {
+        apikey: KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        password,
+      }),
+    }
+  );
 
   const data = await r.json();
 
@@ -121,7 +130,9 @@ async function getJarvisSession(
   const userId = authSession.user?.id;
 
   if (!userId) {
-    throw new Error("Usuário autenticado não encontrado.");
+    throw new Error(
+      "Usuário autenticado não encontrado."
+    );
   }
 
   const params = new URLSearchParams({
@@ -164,25 +175,31 @@ async function rpc(
   payload: any = {},
   accessToken?: string
 ) {
-  const r = await fetch(`${URL}/rest/v1/rpc/jarvis_command`, {
-    method: "POST",
-    headers: {
-      apikey: KEY,
-      Authorization: `Bearer ${accessToken || KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      p_session_id: sessionId,
-      p_action: action,
-      p_payload: payload,
-    }),
-  });
+  const r = await fetch(
+    `${URL}/rest/v1/rpc/jarvis_command`,
+    {
+      method: "POST",
+      headers: {
+        apikey: KEY,
+        Authorization: `Bearer ${
+          accessToken || KEY
+        }`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        p_session_id: sessionId,
+        p_action: action,
+        p_payload: payload,
+      }),
+    }
+  );
 
   if (!r.ok) {
     const text = await r.text();
 
     try {
       const parsed = JSON.parse(text);
+
       throw new Error(
         parsed?.message ||
           parsed?.error ||
@@ -202,18 +219,27 @@ function Login({
   onLogin: (session: AuthSession) => void;
 }) {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [password, setPassword] =
+    useState("");
+  const [loading, setLoading] =
+    useState(false);
+  const [error, setError] =
+    useState("");
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handleLogin(
+    e: React.FormEvent
+  ) {
     e.preventDefault();
 
     setError("");
     setLoading(true);
 
     try {
-      const session = await supabaseAuth(email, password);
+      const session =
+        await supabaseAuth(
+          email,
+          password
+        );
 
       localStorage.setItem(
         "jarvis_auth_session",
@@ -233,9 +259,14 @@ function Login({
 
   return (
     <div className="login-screen">
-      <form className="login-card" onSubmit={handleLogin}>
+      <form
+        className="login-card"
+        onSubmit={handleLogin}
+      >
         <div className="login-brand">
-          <div className="orb">✦</div>
+          <div className="orb">
+            ✦
+          </div>
 
           <div>
             <b>JARVIS</b>
@@ -244,13 +275,18 @@ function Login({
         </div>
 
         <div className="login-title">
-          <small>SECURE ACCESS</small>
+          <small>
+            SECURE ACCESS
+          </small>
 
-          <h1>Bem-vindo, Senhor.</h1>
+          <h1>
+            Bem-vindo, Senhor.
+          </h1>
 
           <p>
-            Entre para acessar o estado operacional
-            do BRODE OS.
+            Entre para acessar o
+            estado operacional do
+            BRODE OS.
           </p>
         </div>
 
@@ -305,6 +341,18 @@ function Login({
 }
 
 function App() {
+  const bridgeRef =
+    useRef<WebSocket | null>(null);
+
+  const reconnectTimerRef =
+    useRef<number | null>(null);
+
+  const [bridgeConnected, setBridgeConnected] =
+    useState(false);
+
+  const [bridgeMessage, setBridgeMessage] =
+    useState("");
+
   const [auth, setAuth] =
     useState<AuthSession | null>(null);
 
@@ -353,27 +401,339 @@ function App() {
   const [actionLoading, setActionLoading] =
     useState<string | null>(null);
 
-  async function loadBriefing(sessionId: string, token: string) {
-    const data = await rpc(
-      sessionId,
-      "briefing_core",
-      {},
-      token
-    );
+  /*
+   * =====================================================
+   * JARVIS LOCAL BRIDGE
+   * =====================================================
+   *
+   * A UI se conecta ao processo Node.js rodando
+   * localmente no computador.
+   *
+   * Não existe IA aqui.
+   *
+   * O Bridge apenas transporta comandos.
+   */
 
-    setBriefing(data?.data ?? data);
+  useEffect(() => {
+    let destroyed = false;
+
+    function connectBridge() {
+      if (destroyed) {
+        return;
+      }
+
+      try {
+        const ws =
+          new WebSocket(
+            BRIDGE_URL
+          );
+
+        bridgeRef.current = ws;
+
+        ws.onopen = () => {
+          console.log(
+            "🟢 JARVIS Local Bridge conectado"
+          );
+
+          setBridgeConnected(
+            true
+          );
+
+          setBridgeMessage(
+            ""
+          );
+        };
+
+        ws.onmessage = (
+          event
+        ) => {
+          try {
+            const message =
+              JSON.parse(
+                event.data
+              );
+
+            console.log(
+              "📡 Bridge → JARVIS:",
+              message
+            );
+
+            /*
+             * TESTE VISUAL
+             *
+             * Quando o Bridge enviar:
+             *
+             * {
+             *   type: "ui_test",
+             *   message: "..."
+             * }
+             *
+             * a UI mostra a mensagem.
+             */
+
+            if (
+              message?.type ===
+              "ui_test"
+            ) {
+              setBridgeMessage(
+                message.message ||
+                  "Comando recebido do JARVIS Bridge."
+              );
+
+              return;
+            }
+
+            /*
+             * Comandos JARVIS futuros
+             */
+
+            if (
+              message?.type ===
+              "jarvis_command"
+            ) {
+              const command =
+                message.command;
+
+              console.log(
+                "🧠 Comando JARVIS recebido:",
+                command
+              );
+
+              handleBridgeCommand(
+                command
+              );
+            }
+          } catch (error) {
+            console.error(
+              "Erro ao interpretar mensagem do Bridge:",
+              error
+            );
+          }
+        };
+
+        ws.onclose = () => {
+          if (destroyed) {
+            return;
+          }
+
+          console.log(
+            "🔴 JARVIS Local Bridge desconectado"
+          );
+
+          setBridgeConnected(
+            false
+          );
+
+          bridgeRef.current =
+            null;
+
+          reconnectTimerRef.current =
+            window.setTimeout(
+              connectBridge,
+              3000
+            );
+        };
+
+        ws.onerror = () => {
+          setBridgeConnected(
+            false
+          );
+        };
+      } catch (error) {
+        console.error(
+          "Erro ao conectar ao Bridge:",
+          error
+        );
+
+        setBridgeConnected(
+          false
+        );
+
+        reconnectTimerRef.current =
+          window.setTimeout(
+            connectBridge,
+            3000
+          );
+      }
+    }
+
+    connectBridge();
+
+    return () => {
+      destroyed = true;
+
+      if (
+        reconnectTimerRef.current
+      ) {
+        window.clearTimeout(
+          reconnectTimerRef.current
+        );
+      }
+
+      if (
+        bridgeRef.current
+      ) {
+        bridgeRef.current.close();
+      }
+    };
+  }, []);
+
+  /*
+   * Aqui ficará a camada que traduz comandos
+   * recebidos pelo Bridge em ações da UI.
+   *
+   * Por enquanto deixamos somente alguns
+   * comandos seguros para validar a arquitetura.
+   */
+
+  function handleBridgeCommand(
+    command: any
+  ) {
+    if (!command) {
+      return;
+    }
+
+    /*
+     * Exemplo:
+     *
+     * {
+     *   action: "navigate",
+     *   page: "Prospecção"
+     * }
+     */
+
+    if (
+      command.action ===
+      "navigate"
+    ) {
+      const page =
+        command.page;
+
+      if (
+        typeof page ===
+        "string"
+      ) {
+        navigate(page);
+      }
+
+      return;
+    }
+
+    /*
+     * Exemplo:
+     *
+     * {
+     *   action: "notification",
+     *   message: "..."
+     * }
+     */
+
+    if (
+      command.action ===
+      "notification"
+    ) {
+      setBridgeMessage(
+        command.message ||
+          "Nova instrução recebida."
+      );
+
+      return;
+    }
+
+    /*
+     * Exemplo:
+     *
+     * {
+     *   action: "refresh"
+     * }
+     */
+
+    if (
+      command.action ===
+      "refresh"
+    ) {
+      refreshCurrentPage();
+
+      return;
+    }
+
+    /*
+     * Comando futuro:
+     *
+     * {
+     *   action: "ui",
+     *   ...
+     * }
+     *
+     * Podemos expandir sem alterar
+     * o restante da arquitetura.
+     */
+  }
+
+  async function refreshCurrentPage() {
+    if (
+      !jarvisSession ||
+      !auth?.access_token
+    ) {
+      return;
+    }
+
+    try {
+      if (
+        active ===
+        "Visão geral"
+      ) {
+        await loadBriefing(
+          jarvisSession,
+          auth.access_token
+        );
+
+        await loadCommandCenter(
+          jarvisSession,
+          auth.access_token
+        );
+
+        return;
+      }
+
+      await navigate(active);
+    } catch (error) {
+      console.error(
+        "Erro ao atualizar:",
+        error
+      );
+    }
+  }
+
+  async function loadBriefing(
+    sessionId: string,
+    token: string
+  ) {
+    const data =
+      await rpc(
+        sessionId,
+        "briefing_core",
+        {},
+        token
+      );
+
+    setBriefing(
+      data?.data ??
+        data
+    );
   }
 
   async function loadProspects(
     sessionId: string,
     token: string
   ) {
-    const data = await rpc(
-      sessionId,
-      "get_prospecting_queue",
-      { limit: 50 },
-      token
-    );
+    const data =
+      await rpc(
+        sessionId,
+        "get_prospecting_queue",
+        { limit: 50 },
+        token
+      );
 
     setProspects(
       data?.items ??
@@ -386,12 +746,13 @@ function App() {
     sessionId: string,
     token: string
   ) {
-    const data = await rpc(
-      sessionId,
-      "get_outreach_queue",
-      { limit: 50 },
-      token
-    );
+    const data =
+      await rpc(
+        sessionId,
+        "get_outreach_queue",
+        { limit: 50 },
+        token
+      );
 
     setOutreach(
       data?.items ??
@@ -404,32 +765,40 @@ function App() {
     sessionId: string,
     token: string
   ) {
-    const data = await rpc(
-      sessionId,
-      "command_center",
-      {},
-      token
-    );
+    const data =
+      await rpc(
+        sessionId,
+        "command_center",
+        {},
+        token
+      );
 
     const result =
-      data?.data ?? data;
+      data?.data ??
+      data;
 
     setProjects(
-      result?.projects ?? []
+      result?.projects ??
+        []
     );
 
     setTasks(
-      result?.tasks ?? []
+      result?.tasks ??
+        []
     );
 
-    if (result?.briefing) {
+    if (
+      result?.briefing
+    ) {
       setBriefing(
         result.briefing?.data ??
           result.briefing
       );
     }
 
-    if (result?.prospects) {
+    if (
+      result?.prospects
+    ) {
       setProspects(
         result.prospects?.items ??
           result.prospects ??
@@ -437,7 +806,9 @@ function App() {
       );
     }
 
-    if (result?.outreach) {
+    if (
+      result?.outreach
+    ) {
       setOutreach(
         result.outreach?.items ??
           result.outreach ??
@@ -452,26 +823,31 @@ function App() {
     sessionId: string,
     token: string
   ) {
-    const data = await rpc(
-      sessionId,
-      "boot_context",
-      {},
-      token
-    );
+    const data =
+      await rpc(
+        sessionId,
+        "boot_context",
+        {},
+        token
+      );
 
     const result =
-      data?.data ?? data;
+      data?.data ??
+      data;
 
     setMemory(
-      result?.memory ?? []
+      result?.memory ??
+        []
     );
 
     setProjects(
-      result?.projects ?? []
+      result?.projects ??
+        []
     );
 
     setTasks(
-      result?.pending_tasks ?? []
+      result?.pending_tasks ??
+        []
     );
   }
 
@@ -487,8 +863,10 @@ function App() {
 
       if (
         currentAuth.expires_at &&
-        currentAuth.expires_at * 1000 <
-          Date.now() + 60_000 &&
+        currentAuth.expires_at *
+            1000 <
+          Date.now() +
+            60_000 &&
         currentAuth.refresh_token
       ) {
         currentAuth =
@@ -498,10 +876,14 @@ function App() {
 
         localStorage.setItem(
           "jarvis_auth_session",
-          JSON.stringify(currentAuth)
+          JSON.stringify(
+            currentAuth
+          )
         );
 
-        setAuth(currentAuth);
+        setAuth(
+          currentAuth
+        );
       }
 
       const sessionId =
@@ -550,6 +932,7 @@ function App() {
         JSON.parse(saved);
 
       setAuth(session);
+
       boot(session);
     } catch {
       localStorage.removeItem(
@@ -576,35 +959,50 @@ function App() {
     setPageLoading(true);
 
     try {
-      if (page === "Prospecção") {
+      if (
+        page ===
+        "Prospecção"
+      ) {
         await loadProspects(
           jarvisSession,
           auth.access_token
         );
       }
 
-      if (page === "Outreach") {
+      if (
+        page ===
+        "Outreach"
+      ) {
         await loadOutreach(
           jarvisSession,
           auth.access_token
         );
       }
 
-      if (page === "Projetos") {
+      if (
+        page ===
+        "Projetos"
+      ) {
         await loadCommandCenter(
           jarvisSession,
           auth.access_token
         );
       }
 
-      if (page === "Memória") {
+      if (
+        page ===
+        "Memória"
+      ) {
         await loadMemory(
           jarvisSession,
           auth.access_token
         );
       }
 
-      if (page === "Command Center") {
+      if (
+        page ===
+        "Command Center"
+      ) {
         await loadCommandCenter(
           jarvisSession,
           auth.access_token
@@ -624,7 +1022,9 @@ function App() {
     const text =
       cmd.trim();
 
-    if (!text) return;
+    if (!text) {
+      return;
+    }
 
     if (
       !jarvisSession ||
@@ -633,11 +1033,18 @@ function App() {
       setErr(
         "Sessão JARVIS não encontrada."
       );
+
       return;
     }
 
-    setCommandLoading(true);
-    setCommandResult(null);
+    setCommandLoading(
+      true
+    );
+
+    setCommandResult(
+      null
+    );
+
     setErr("");
 
     try {
@@ -647,12 +1054,19 @@ function App() {
       let action =
         "briefing_core";
 
-      let payload: any = {};
+      let payload: any =
+        {};
 
       if (
-        lower.includes("prospect") ||
-        lower.includes("lead") ||
-        lower.includes("prospecção")
+        lower.includes(
+          "prospect"
+        ) ||
+        lower.includes(
+          "lead"
+        ) ||
+        lower.includes(
+          "prospecção"
+        )
       ) {
         action =
           "get_prospecting_queue";
@@ -663,9 +1077,15 @@ function App() {
       }
 
       if (
-        lower.includes("outreach") ||
-        lower.includes("mensagem") ||
-        lower.includes("abordagem")
+        lower.includes(
+          "outreach"
+        ) ||
+        lower.includes(
+          "mensagem"
+        ) ||
+        lower.includes(
+          "abordagem"
+        )
       ) {
         action =
           "get_outreach_queue";
@@ -676,27 +1096,45 @@ function App() {
       }
 
       if (
-        lower.includes("projeto") ||
-        lower.includes("projetos")
+        lower.includes(
+          "projeto"
+        ) ||
+        lower.includes(
+          "projetos"
+        )
       ) {
         action =
           "command_center";
       }
 
       if (
-        lower.includes("memória") ||
-        lower.includes("memoria") ||
-        lower.includes("contexto")
+        lower.includes(
+          "memória"
+        ) ||
+        lower.includes(
+          "memoria"
+        ) ||
+        lower.includes(
+          "contexto"
+        )
       ) {
         action =
           "boot_context";
       }
 
       if (
-        lower.includes("atenção") ||
-        lower.includes("atencao") ||
-        lower.includes("status") ||
-        lower.includes("briefing")
+        lower.includes(
+          "atenção"
+        ) ||
+        lower.includes(
+          "atencao"
+        ) ||
+        lower.includes(
+          "status"
+        ) ||
+        lower.includes(
+          "briefing"
+        )
       ) {
         action =
           "briefing_core";
@@ -778,13 +1216,17 @@ function App() {
           "Não foi possível executar o comando."
       );
     } finally {
-      setCommandLoading(false);
+      setCommandLoading(
+        false
+      );
     }
   }
 
   async function reviewProspect(
     id: string,
-    status: "approved" | "rejected"
+    status:
+      | "approved"
+      | "rejected"
   ) {
     if (
       !jarvisSession ||
@@ -802,7 +1244,8 @@ function App() {
         "review_prospect",
         {
           result_id: id,
-          review_status: status,
+          review_status:
+            status,
         },
         auth.access_token
       );
@@ -822,7 +1265,9 @@ function App() {
           "Não foi possível revisar o prospect."
       );
     } finally {
-      setActionLoading(null);
+      setActionLoading(
+        null
+      );
     }
   }
 
@@ -860,7 +1305,9 @@ function App() {
           "Não foi possível analisar o prospect."
       );
     } finally {
-      setActionLoading(null);
+      setActionLoading(
+        null
+      );
     }
   }
 
@@ -906,7 +1353,9 @@ function App() {
           "Não foi possível revisar o outreach."
       );
     } finally {
-      setActionLoading(null);
+      setActionLoading(
+        null
+      );
     }
   }
 
@@ -929,13 +1378,17 @@ function App() {
       )}%`;
     }
 
-    return `${Math.round(n)}%`;
+    return `${Math.round(
+      n
+    )}%`;
   }
 
   function formatDate(
     value?: string
   ) {
-    if (!value) return "";
+    if (!value) {
+      return "";
+    }
 
     try {
       return new Date(
@@ -957,21 +1410,32 @@ function App() {
   function statusLabel(
     value?: string
   ) {
-    if (!value) return "—";
+    if (!value) {
+      return "—";
+    }
 
     const labels: Record<
       string,
       string
     > = {
-      qualified: "Qualificado",
-      partial: "Parcial",
-      unconfirmed: "Não confirmado",
-      not_fit: "Fora do ICP",
-      approved: "Aprovado",
-      rejected: "Rejeitado",
-      pending: "Pendente",
-      draft: "Rascunho",
-      review: "Em revisão",
+      qualified:
+        "Qualificado",
+      partial:
+        "Parcial",
+      unconfirmed:
+        "Não confirmado",
+      not_fit:
+        "Fora do ICP",
+      approved:
+        "Aprovado",
+      rejected:
+        "Rejeitado",
+      pending:
+        "Pendente",
+      draft:
+        "Rascunho",
+      review:
+        "Em revisão",
     };
 
     return (
@@ -983,8 +1447,13 @@ function App() {
   if (!auth) {
     return (
       <Login
-        onLogin={(session) => {
-          setAuth(session);
+        onLogin={(
+          session
+        ) => {
+          setAuth(
+            session
+          );
+
           boot(session);
         }}
       />
@@ -1003,19 +1472,23 @@ function App() {
   const metrics = [
     [
       "Ações abertas",
-      briefing?.open_actions ?? "—",
+      briefing?.open_actions ??
+        "—",
     ],
     [
       "Prospects pendentes",
-      briefing?.pending_prospects ?? "—",
+      briefing?.pending_prospects ??
+        "—",
     ],
     [
       "Outreach em revisão",
-      briefing?.outreach_review ?? "—",
+      briefing?.outreach_review ??
+        "—",
     ],
     [
       "Projetos ativos",
-      briefing?.active_projects ?? "—",
+      briefing?.active_projects ??
+        "—",
     ],
   ];
 
@@ -1029,9 +1502,13 @@ function App() {
                 className="metric"
                 key={label}
               >
-                <span>{label}</span>
+                <span>
+                  {label}
+                </span>
 
-                <strong>{value}</strong>
+                <strong>
+                  {value}
+                </strong>
               </div>
             )
           )}
@@ -1067,9 +1544,10 @@ function App() {
                 </b>
 
                 <p>
-                  Existe mensagem pronta
-                  para análise antes de
-                  qualquer ação externa.
+                  Existe mensagem
+                  pronta para análise
+                  antes de qualquer
+                  ação externa.
                 </p>
               </div>
             </div>
@@ -1088,8 +1566,8 @@ function App() {
                 <p>
                   {briefing?.pending_prospects ??
                     0}{" "}
-                  empresas estão na fila
-                  de prospecção.
+                  empresas estão na
+                  fila de prospecção.
                 </p>
               </div>
             </div>
@@ -1131,9 +1609,13 @@ function App() {
                   className="systemline"
                   key={name}
                 >
-                  <span>{name}</span>
+                  <span>
+                    {name}
+                  </span>
 
-                  <b>{status}</b>
+                  <b>
+                    {status}
+                  </b>
                 </div>
               )
             )}
@@ -1147,7 +1629,8 @@ function App() {
             </small>
 
             <h2>
-              Revisar a fila de Outreach
+              Revisar a fila de
+              Outreach
             </h2>
 
             <p>
@@ -1160,7 +1643,9 @@ function App() {
           <button
             className="primary"
             onClick={() =>
-              navigate("Outreach")
+              navigate(
+                "Outreach"
+              )
             }
           >
             Abrir Outreach →
@@ -1188,13 +1673,16 @@ function App() {
             </div>
 
             <span className="badge blue">
-              {prospects.length} pendentes
+              {prospects.length}{" "}
+              pendentes
             </span>
           </div>
 
-          {prospects.length === 0 ? (
+          {prospects.length ===
+          0 ? (
             <div className="loading">
-              Nenhum prospect pendente.
+              Nenhum prospect
+              pendente.
             </div>
           ) : (
             prospects.map(
@@ -1213,15 +1701,18 @@ function App() {
 
                   <div
                     style={{
-                      width: "100%",
+                      width:
+                        "100%",
                     }}
                   >
                     <div
                       style={{
-                        display: "flex",
+                        display:
+                          "flex",
                         justifyContent:
                           "space-between",
-                        gap: "16px",
+                        gap:
+                          "16px",
                         flexWrap:
                           "wrap",
                       }}
@@ -1258,7 +1749,8 @@ function App() {
                     </p>
 
                     {p.gaps &&
-                      p.gaps.length > 0 && (
+                      p.gaps.length >
+                        0 && (
                         <p>
                           <b>
                             Lacuna:
@@ -1271,8 +1763,10 @@ function App() {
 
                     <div
                       style={{
-                        display: "flex",
-                        gap: "8px",
+                        display:
+                          "flex",
+                        gap:
+                          "8px",
                         marginTop:
                           "12px",
                         flexWrap:
@@ -1356,14 +1850,16 @@ function App() {
             </div>
 
             <span className="badge yellow">
-              {outreach.length} em revisão
+              {outreach.length}{" "}
+              em revisão
             </span>
           </div>
 
-          {outreach.length === 0 ? (
+          {outreach.length ===
+          0 ? (
             <div className="loading">
-              Nenhum outreach aguardando
-              revisão.
+              Nenhum outreach
+              aguardando revisão.
             </div>
           ) : (
             outreach.map(
@@ -1382,15 +1878,18 @@ function App() {
 
                   <div
                     style={{
-                      width: "100%",
+                      width:
+                        "100%",
                     }}
                   >
                     <div
                       style={{
-                        display: "flex",
+                        display:
+                          "flex",
                         justifyContent:
                           "space-between",
-                        gap: "16px",
+                        gap:
+                          "16px",
                         flexWrap:
                           "wrap",
                       }}
@@ -1480,8 +1979,10 @@ function App() {
 
                     <div
                       style={{
-                        display: "flex",
-                        gap: "8px",
+                        display:
+                          "flex",
+                        gap:
+                          "8px",
                         marginTop:
                           "12px",
                         flexWrap:
@@ -1552,7 +2053,8 @@ function App() {
               </span>
             </div>
 
-            {projects.length === 0 ? (
+            {projects.length ===
+            0 ? (
               <div className="loading">
                 Nenhum projeto ativo.
               </div>
@@ -1615,7 +2117,8 @@ function App() {
 
             {tasks.length === 0 ? (
               <div className="loading">
-                Nenhuma tarefa pendente.
+                Nenhuma tarefa
+                pendente.
               </div>
             ) : (
               tasks.map(
@@ -1664,9 +2167,11 @@ function App() {
             </span>
           </div>
 
-          {memory.length === 0 ? (
+          {memory.length ===
+          0 ? (
             <div className="loading">
-              Nenhuma memória encontrada.
+              Nenhuma memória
+              encontrada.
             </div>
           ) : (
             memory.map(
@@ -1730,9 +2235,11 @@ function App() {
           </div>
 
           <p>
-            Dê uma instrução em linguagem natural.
-            O JARVIS traduz comandos simples para
-            as ações disponíveis no BRODE OS.
+            Dê uma instrução em
+            linguagem natural. O
+            JARVIS traduz comandos
+            simples para as ações
+            disponíveis no BRODE OS.
           </p>
 
           <CommandBox />
@@ -1753,7 +2260,8 @@ function App() {
 
               <div
                 style={{
-                  width: "100%",
+                  width:
+                    "100%",
                 }}
               >
                 <b>
@@ -1763,7 +2271,9 @@ function App() {
                 <p>
                   Ação:{" "}
                   <strong>
-                    {commandResult.action}
+                    {
+                      commandResult.action
+                    }
                   </strong>
                 </p>
 
@@ -1801,18 +2311,22 @@ function App() {
         </small>
 
         <h2>
-          O que devo fazer, Senhor?
+          O que devo fazer,
+          Senhor?
         </h2>
 
         <div className="commandrow">
           <input
             value={cmd}
             onChange={(e) =>
-              setCmd(e.target.value)
+              setCmd(
+                e.target.value
+              )
             }
             onKeyDown={(e) => {
               if (
-                e.key === "Enter"
+                e.key ===
+                "Enter"
               ) {
                 runCommand();
               }
@@ -1822,8 +2336,12 @@ function App() {
 
           <button
             className="primary"
-            disabled={commandLoading}
-            onClick={runCommand}
+            disabled={
+              commandLoading
+            }
+            onClick={
+              runCommand
+            }
           >
             {commandLoading
               ? "Executando…"
@@ -1833,14 +2351,19 @@ function App() {
 
         <p
           style={{
-            marginTop: "10px",
-            opacity: 0.6,
-            fontSize: "12px",
+            marginTop:
+              "10px",
+            opacity:
+              0.6,
+            fontSize:
+              "12px",
           }}
         >
-          Exemplos: “mostre os prospects” ·
-          “abra o outreach” · “mostre os projetos”
-          · “mostre minha memória”
+          Exemplos: “mostre os
+          prospects” · “abra o
+          outreach” · “mostre os
+          projetos” · “mostre minha
+          memória”
         </p>
       </div>
     );
@@ -1849,22 +2372,34 @@ function App() {
   let content =
     renderOverview();
 
-  if (active === "Prospecção") {
+  if (
+    active ===
+    "Prospecção"
+  ) {
     content =
       renderProspecting();
   }
 
-  if (active === "Outreach") {
+  if (
+    active ===
+    "Outreach"
+  ) {
     content =
       renderOutreach();
   }
 
-  if (active === "Projetos") {
+  if (
+    active ===
+    "Projetos"
+  ) {
     content =
       renderProjects();
   }
 
-  if (active === "Memória") {
+  if (
+    active ===
+    "Memória"
+  ) {
     content =
       renderMemory();
   }
@@ -1935,9 +2470,52 @@ function App() {
           Sistema operacional
           conectado
 
+          <div
+            style={{
+              display:
+                "flex",
+              alignItems:
+                "center",
+              gap:
+                "7px",
+              marginTop:
+                "10px",
+              fontSize:
+                "11px",
+              color:
+                bridgeConnected
+                  ? "#4ade80"
+                  : "rgba(255,255,255,.4)",
+            }}
+          >
+            <span
+              style={{
+                width:
+                  "7px",
+                height:
+                  "7px",
+                borderRadius:
+                  "50%",
+                background:
+                  bridgeConnected
+                    ? "#4ade80"
+                    : "#666",
+                boxShadow:
+                  bridgeConnected
+                    ? "0 0 10px rgba(74,222,128,.7)"
+                    : "none",
+              }}
+            />
+
+            {bridgeConnected
+              ? "JARVIS LIVE"
+              : "Bridge offline"}
+          </div>
+
           <button
             style={{
-              marginTop: "12px",
+              marginTop:
+                "12px",
               background:
                 "transparent",
               border: 0,
@@ -1954,6 +2532,7 @@ function App() {
               );
 
               setAuth(null);
+
               setJarvisSession(
                 null
               );
@@ -1995,6 +2574,43 @@ function App() {
             ONLINE
           </div>
         </header>
+
+        {bridgeMessage && (
+          <div
+            className="alert"
+            style={{
+              marginBottom:
+                "16px",
+              borderColor:
+                "rgba(74,222,128,.25)",
+            }}
+          >
+            <span>
+              ✦
+            </span>{" "}
+            {bridgeMessage}
+
+            <button
+              onClick={() =>
+                setBridgeMessage("")
+              }
+              style={{
+                marginLeft:
+                  "12px",
+                background:
+                  "transparent",
+                border:
+                  "none",
+                color:
+                  "inherit",
+                cursor:
+                  "pointer",
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {err && (
           <div className="alert">
