@@ -83,8 +83,8 @@ async function getJarvisSession(
   const params = new URLSearchParams({
     select: "*",
     user_id: `eq.${userId}`,
-    status: "eq.active",
     expires_at: `gt.${new Date().toISOString()}`,
+    revoked_at: "is.null",
     order: "expires_at.desc",
     limit: "1",
   });
@@ -189,7 +189,9 @@ function Login({
 
         <div className="login-title">
           <small>SECURE ACCESS</small>
+
           <h1>Bem-vindo, Senhor.</h1>
+
           <p>
             Entre para acessar o estado operacional do BRODE OS.
           </p>
@@ -203,6 +205,7 @@ function Login({
 
         <label>
           <span>E-mail</span>
+
           <input
             type="email"
             value={email}
@@ -215,6 +218,7 @@ function Login({
 
         <label>
           <span>Senha</span>
+
           <input
             type="password"
             value={password}
@@ -230,7 +234,9 @@ function Login({
           type="submit"
           disabled={loading}
         >
-          {loading ? "Autenticando…" : "Entrar no JARVIS →"}
+          {loading
+            ? "Autenticando…"
+            : "Entrar no JARVIS →"}
         </button>
       </form>
     </div>
@@ -239,9 +245,8 @@ function Login({
 
 function App() {
   const [auth, setAuth] = useState<AuthSession | null>(null);
-  const [jarvisSession, setJarvisSession] = useState<string | null>(
-    null
-  );
+  const [jarvisSession, setJarvisSession] =
+    useState<string | null>(null);
 
   const [b, setB] = useState<any>(null);
   const [err, setErr] = useState("");
@@ -256,9 +261,6 @@ function App() {
     try {
       let currentAuth = authSession;
 
-      /*
-       * Renova o token caso ele esteja próximo de expirar.
-       */
       if (
         currentAuth.expires_at &&
         currentAuth.expires_at * 1000 <
@@ -277,7 +279,9 @@ function App() {
         setAuth(currentAuth);
       }
 
-      const sessionId = await getJarvisSession(currentAuth);
+      const sessionId = await getJarvisSession(
+        currentAuth
+      );
 
       setJarvisSession(sessionId);
 
@@ -347,9 +351,18 @@ function App() {
 
   const ms = [
     ["Ações abertas", b?.open_actions ?? "—"],
-    ["Prospects pendentes", b?.pending_prospects ?? "—"],
-    ["Outreach em revisão", b?.outreach_review ?? "—"],
-    ["Projetos ativos", b?.active_projects ?? "—"],
+    [
+      "Prospects pendentes",
+      b?.pending_prospects ?? "—",
+    ],
+    [
+      "Outreach em revisão",
+      b?.outreach_review ?? "—",
+    ],
+    [
+      "Projetos ativos",
+      b?.active_projects ?? "—",
+    ],
   ];
 
   return (
@@ -367,12 +380,23 @@ function App() {
         <nav>
           {nav.map((n, i) => (
             <button
-              className={active === n ? "active" : ""}
+              className={
+                active === n ? "active" : ""
+              }
               onClick={() => setActive(n)}
               key={n}
             >
               <i>
-                {["⌂", "◈", "✉", "◉", "◇", "⌁"][i]}
+                {
+                  [
+                    "⌂",
+                    "◈",
+                    "✉",
+                    "◉",
+                    "◇",
+                    "⌁",
+                  ][i]
+                }
               </i>
 
               {n}
@@ -394,8 +418,8 @@ function App() {
             <h1>Boa tarde, Senhor.</h1>
 
             <p>
-              O BRODE OS está pronto. Aqui está o que merece
-              sua atenção.
+              O BRODE OS está pronto. Aqui está o que
+              merece sua atenção.
             </p>
           </div>
 
@@ -418,8 +442,12 @@ function App() {
           <section>
             <div className="grid">
               {ms.map(([l, v]) => (
-                <div className="metric" key={l}>
+                <div
+                  className="metric"
+                  key={l}
+                >
                   <span>{l}</span>
+
                   <strong>{v}</strong>
                 </div>
               ))}
@@ -452,9 +480,9 @@ function App() {
                     </b>
 
                     <p>
-                      Existe uma mensagem pronta para
-                      análise antes de qualquer ação
-                      externa.
+                      Existe uma mensagem pronta
+                      para análise antes de qualquer
+                      ação externa.
                     </p>
                   </div>
                 </div>
@@ -471,8 +499,9 @@ function App() {
                     </b>
 
                     <p>
-                      {b?.pending_prospects ?? 0} empresas
-                      estão na fila de prospecção.
+                      {b?.pending_prospects ?? 0}{" "}
+                      empresas estão na fila de
+                      prospecção.
                     </p>
                   </div>
                 </div>
